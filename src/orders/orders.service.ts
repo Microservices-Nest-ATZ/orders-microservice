@@ -6,6 +6,8 @@ import { OrderPaginationDto } from './dto/order-pagination.dto';
 import { ChangeStatusDto } from './dto/change-status.dto';
 import { NATS_SERVICE } from 'src/config/services';
 import { firstValueFrom } from 'rxjs';
+import { OrderWithProducts } from './interfaces/order-with-products.interface';
+import { PaidOrderDto } from './dto/paid-order.dto';
 
 @Injectable()
 export class OrdersService {
@@ -22,7 +24,7 @@ export class OrdersService {
       );
 
       const products: any[] = await firstValueFrom(
-        this.client.send({ cmd: 'validate_product' },  productsIds ),
+        this.client.send({ cmd: 'validate_product' }, productsIds),
       );
 
       const totalAmout: number = createOrderDto.items.reduce(
@@ -110,7 +112,7 @@ export class OrdersService {
 
   async findOne(id: string) {
     const order = await this.prisma.order.findFirst({
-      where: { id },
+      where: { id: id },
       include: {
         OrderItem: {
           select: {
@@ -132,7 +134,7 @@ export class OrdersService {
     const productsIds: number[] = order.OrderItem.map((item) => item.productId);
 
     const products: any[] = await firstValueFrom(
-      this.client.send({ cmd: 'validate_product' },  productsIds ),
+      this.client.send({ cmd: 'validate_product' }, productsIds),
     );
 
     return {
@@ -156,10 +158,49 @@ export class OrdersService {
     }
 
     return this.prisma.order.update({
-      where: { id },
+      where: { id: id },
       data: {
         status,
       },
     });
+  }
+
+  async createPaymentSession(orderWithProducts: OrderWithProducts) {
+    const items = orderWithProducts.OrderItem.map(item => {
+      return {
+        name: item.name,
+        price: item.price,
+        quantity: item.quantity
+      }
+    })
+
+    const paymentSession = await firstValueFrom(
+      this.client.send('create.payment.session', {
+        orderId: orderWithProducts.id,
+        currency: 'usd',
+        items: items
+      })
+    );
+
+    return paymentSession;
+  }
+
+  async paidOrder(paidOrderDto: PaidOrderDto){
+    const updatedOrder= await this.prisma.order.update({
+      where: {id: paidOrderDto.orderId} ,
+      data: {
+        status: 'PAID',
+        paid: true,
+        paidAt: new Date(),
+        stripeChargeId: paidOrderDto.stripePaymentId,
+        orderReceipts: {
+          create: {
+            receiptUrl: paidOrderDto.receiptUrl
+          }
+        }        
+      }
+    });
+
+    return updatedOrder;
   }
 }
